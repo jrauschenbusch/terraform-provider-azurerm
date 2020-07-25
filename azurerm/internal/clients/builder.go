@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/hashicorp/go-azure-helpers/authentication"
 	"github.com/hashicorp/go-azure-helpers/sender"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/common"
@@ -14,6 +15,7 @@ import (
 
 type ClientBuilder struct {
 	AuthConfig                  *authentication.Config
+	ClientCredentialsConfig     auth.ClientCredentialsConfig
 	DisableCorrelationRequestID bool
 	DisableTerraformPartnerID   bool
 	PartnerId                   string
@@ -57,6 +59,8 @@ func Build(ctx context.Context, builder ClientBuilder) (*Client, error) {
 		endpoint = strings.TrimSuffix(endpoint, "/")
 		location.CacheSupportedLocations(ctx, endpoint)
 	}
+
+	clientCredentialsConfig := builder.ClientCredentialsConfig
 
 	// client declarations:
 	account, err := NewResourceManagerAccount(ctx, *builder.AuthConfig, *env)
@@ -111,6 +115,7 @@ func Build(ctx context.Context, builder ClientBuilder) (*Client, error) {
 		GraphAuthorizer:             graphAuth,
 		GraphEndpoint:               graphEndpoint,
 		KeyVaultAuthorizer:          keyVaultAuth,
+		ClientCredentialsConfig:     clientCredentialsConfig,
 		ResourceManagerAuthorizer:   auth,
 		ResourceManagerEndpoint:     endpoint,
 		StorageAuthorizer:           storageAuth,

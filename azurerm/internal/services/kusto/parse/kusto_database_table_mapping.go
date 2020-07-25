@@ -2,6 +2,7 @@ package parse
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/azure"
 )
@@ -11,8 +12,8 @@ type KustoDatabaseTableMappingId struct {
 	Cluster       string
 	Database      string
 	Table         string
-	Kind          string
 	Name          string
+	Kind          string
 }
 
 func KustoDatabaseTableMappingID(input string) (*KustoDatabaseTableMappingId, error) {
@@ -21,29 +22,36 @@ func KustoDatabaseTableMappingID(input string) (*KustoDatabaseTableMappingId, er
 		return nil, fmt.Errorf("[ERROR] Unable to parse Kusto Database Table ID %q: %+v", input, err)
 	}
 
-	table := &KustoDatabaseTableMappingId{
+	tableMapping := &KustoDatabaseTableMappingId{
 		ResourceGroup: id.ResourceGroup,
 	}
 
-	if table.Cluster, err = id.PopSegment("Clusters"); err != nil {
+	if tableMapping.Cluster, err = id.PopSegment("Clusters"); err != nil {
 		return nil, err
 	}
 
-	if table.Database, err = id.PopSegment("Databases"); err != nil {
+	if tableMapping.Database, err = id.PopSegment("Databases"); err != nil {
 		return nil, err
 	}
 
-	if table.Table, err = id.PopSegment("Tables"); err != nil {
+	if tableMapping.Table, err = id.PopSegment("Tables"); err != nil {
 		return nil, err
 	}
 
-	if table.Name, err = id.PopSegment("Mappings"); err != nil {
+	mapping, err := id.PopSegment("Mappings")
+	if err != nil {
 		return nil, err
 	}
+	components := strings.Split(mapping, "_")
+	if len(components) != 2 {
+		return nil, fmt.Errorf("Azure Kusto Database Table Mapping ID should have 2 segments, got %d: '%s'", len(components), mapping)
+	}
+	tableMapping.Kind = components[0]
+	tableMapping.Name = components[1]
 
 	if err := id.ValidateNoEmptySegments(input); err != nil {
 		return nil, err
 	}
 
-	return &table, nil
+	return tableMapping, nil
 }

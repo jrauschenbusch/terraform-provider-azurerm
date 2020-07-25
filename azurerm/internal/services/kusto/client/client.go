@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/Azure/azure-sdk-for-go/services/kusto/mgmt/2020-02-15/kusto"
+	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/common"
 )
 
@@ -12,6 +13,7 @@ type Client struct {
 	DatabasesClient                      *kusto.DatabasesClient
 	DataConnectionsClient                *kusto.DataConnectionsClient
 	DatabasePrincipalAssignmentsClient   *kusto.DatabasePrincipalAssignmentsClient
+	ClientCredentialsConfig              auth.ClientCredentialsConfig
 }
 
 func NewClient(o *common.ClientOptions) *Client {
@@ -40,5 +42,6 @@ func NewClient(o *common.ClientOptions) *Client {
 		DatabasesClient:                      &DatabasesClient,
 		DataConnectionsClient:                &DataConnectionsClient,
 		DatabasePrincipalAssignmentsClient:   &DatabasePrincipalAssignmentsClient,
+		ClientCredentialsConfig:              o.ClientCredentialsConfig,
 	}
 }

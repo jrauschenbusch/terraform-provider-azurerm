@@ -3,11 +3,15 @@ package kusto
 import (
 	"fmt"
 	"log"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	types "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+	formats "github.com/Azure/azure-sdk-for-go/services/kusto/mgmt/2020-02-15/kusto"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/helpers/azure"
@@ -15,6 +19,7 @@ import (
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/clients"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/services/kusto/parse"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/timeouts"
+	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
 )
 
 type MappingRec struct {
@@ -25,7 +30,7 @@ type MappingRec struct {
 	Table    string
 }
 
-func resourceArmKustoDatabaseTable() *schema.Resource {
+func resourceArmKustoDatabaseTableIngestionMapping() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceArmKustoDatabaseTableCreateUpdate,
 		Read:   resourceArmKustoDatabaseTableRead,
@@ -79,11 +84,11 @@ func resourceArmKustoDatabaseTable() *schema.Resource {
 				Required: true,
 				ForceNew: true,
 				ValidateFunc: validation.StringInSlice([]string{
-					"csv",
-					"json",
-					"avro",
-					"parquet",
-					"orc",
+					string(formats.AVRO),
+					string(formats.CSV),
+					string(formats.JSON),
+					string(formats.ORC),
+					string(formats.PARQUET),
 				}, true),
 			},
 
@@ -101,6 +106,18 @@ func resourceArmKustoDatabaseTable() *schema.Resource {
 						"data_type": {
 							Type:     schema.TypeString,
 							Optional: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(types.Bool),
+								string(types.DateTime),
+								string(types.Dynamic),
+								string(types.GUID),
+								string(types.Int),
+								string(types.Long),
+								string(types.Real),
+								string(types.String),
+								string(types.Timespan),
+								string(types.Decimal),
+							}),
 						},
 						"properties": {
 							Type:     schema.TypeList,
@@ -119,8 +136,9 @@ func resourceArmKustoDatabaseTable() *schema.Resource {
 										ValidateFunc: validation.StringIsNotEmpty,
 									},
 									"ordinal": {
-										Type:     schema.TypeInt,
-										Optional: true,
+										Type:         schema.TypeInt,
+										Optional:     true,
+										ValidateFunc: validation.IntAtLeast(0),
 									},
 									"constant_value": {
 										Type:         schema.TypeString,
@@ -128,9 +146,21 @@ func resourceArmKustoDatabaseTable() *schema.Resource {
 										ValidateFunc: validation.StringIsNotEmpty,
 									},
 									"transform": {
-										Type:         schema.TypeString,
-										Optional:     true,
-										ValidateFunc: validation.StringIsNotEmpty,
+										Type:     schema.TypeString,
+										Optional: true,
+										ValidateFunc: validation.Any(validation.StringInSlice([]string{
+											"PropertyBagArrayToDictionary",
+											"SourceLocation",
+											"SourceLineNumber",
+											"DateTimeFromUnixSeconds",
+											"DateTimeFromUnixMilliseconds",
+											"DateTimeFromUnixMicroseconds",
+											"DateTimeFromUnixNanoseconds",
+										}, false),
+											validation.StringMatch(
+												regexp.MustCompile(`GetPathElement\(^\d+$\)`),
+												`Invalid transform provided`),
+										),
 									},
 								},
 							},
@@ -150,7 +180,7 @@ func resourceArmKustoDatabaseTableCreateUpdate(d *schema.ResourceData, meta inte
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	log.Printf("[INFO] preparing arguments for Azure Kusto Database Table creation.")
+	log.Printf("[INFO] preparing arguments for Azure Kusto Database Table Mapping creation.")
 
 	name := d.Get("name").(string)
 	resourceGroupName := d.Get("resource_group_name").(string)
@@ -158,7 +188,7 @@ func resourceArmKustoDatabaseTableCreateUpdate(d *schema.ResourceData, meta inte
 	databaseName := d.Get("database_name").(string)
 	tableName := d.Get("table_name").(string)
 	kind := d.Get("kind").(string)
-	mapping := d.Get("mapping").(interface{})
+	mapping := d.Get("mapping").([]interface{})
 
 	cluster, err := clusterClient.Get(ctx, resourceGroupName, clusterName)
 	if err != nil {
@@ -172,17 +202,17 @@ func resourceArmKustoDatabaseTableCreateUpdate(d *schema.ResourceData, meta inte
 	authorizer := kusto.Authorization{
 		Config: clientCredentialsConfig,
 	}
-	client, err := kusto.New(*cluster.URI, authorizer)
 
+	client, err := kusto.New(*cluster.URI, authorizer)
 	if err != nil {
 		return fmt.Errorf("Error creating Kusto Cluster client %s: %+v", clusterName, err)
 	}
 
 	readWriteDB, _ := database.Value.AsReadWriteDatabase()
-	resourceID := fmt.Sprintf("%s/Tables/%s/Mappings/%s/%s", *readWriteDB.ID, tableName, kind, name)
+	resourceID := fmt.Sprintf("%s/Tables/%s/Mappings/%s_%s", *readWriteDB.ID, tableName, kind, name)
 
 	if d.IsNewResource() {
-		stmtRaw := fmt.Sprintf(".show table %s ingestion %s mappings | where Name == \"%s\"", tableName, kind, name)
+		stmtRaw := fmt.Sprintf(".show table %s ingestion %s mappings | where Name == \"%s\"", tableName, strings.ToLower(kind), name)
 
 		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true})).UnsafeAdd(stmtRaw)
 		iter, err := client.Mgmt(ctx, databaseName, stmt)
@@ -209,8 +239,8 @@ func resourceArmKustoDatabaseTableCreateUpdate(d *schema.ResourceData, meta inte
 	}
 
 	// TODO: expand column mappings
-	columnMappings := ""
-	stmtRaw := fmt.Sprintf(".create-or-alter table %s ingestion %s mapping \"%s\" '%s'", tableName, kind, name, columnMappings)
+	columnMappings := expandKustoTableMapping(mapping, kind)
+	stmtRaw := fmt.Sprintf(".create-or-alter table %s ingestion %s mapping \"%s\" '%s'", tableName, strings.ToLower(kind), name, *columnMappings)
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true})).UnsafeAdd(stmtRaw)
 	iter, err := client.Mgmt(ctx, databaseName, stmt)
@@ -255,17 +285,18 @@ func resourceArmKustoDatabaseTableRead(d *schema.ResourceData, meta interface{})
 	authorizer := kusto.Authorization{
 		Config: clientCredentialsConfig,
 	}
+
 	client, err := kusto.New(*cluster.URI, authorizer)
 	if err != nil {
 		return fmt.Errorf("Error creating Kusto Cluster client %s: %+v", *cluster.URI, err)
 	}
 
-	stmtRaw := fmt.Sprintf(".show table %s ingestion %s mappings | where Name == \"%s\"", id.Table, id.Kind, id.Name)
+	stmtRaw := fmt.Sprintf(".show table %s ingestion %s mappings | where Name == \"%s\"", id.Table, strings.ToLower(id.Kind), id.Name)
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true})).UnsafeAdd(stmtRaw)
 	iter, err := client.Mgmt(ctx, id.Database, stmt)
 	if err != nil {
-		return fmt.Errorf("Error querying Kusto: %+v", err)
+		return fmt.Errorf("Error reading Kusto Database Table Ingestion Mapping %q (Cluster %q, Database %q, Table %q): %+v", id.Name, id.Cluster, id.Database, id.Table, err)
 	}
 	defer iter.Stop()
 
@@ -322,12 +353,13 @@ func resourceArmKustoDatabaseTableDelete(d *schema.ResourceData, meta interface{
 	authorizer := kusto.Authorization{
 		Config: clientCredentialsConfig,
 	}
+
 	client, err := kusto.New(*cluster.URI, authorizer)
 	if err != nil {
 		return fmt.Errorf("Error creating Kusto Cluster client %s: %+v", *cluster.URI, err)
 	}
 
-	stmtRaw := fmt.Sprintf(".drop table %s ingestion %s mapping %s", id.Table, id.Kind, id.Name)
+	stmtRaw := fmt.Sprintf(".drop table %s ingestion %s mapping %s", id.Table, strings.ToLower(id.Kind), id.Name)
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true})).UnsafeAdd(stmtRaw)
 	iter, err := client.Mgmt(ctx, id.Database, stmt)
 	if err != nil {
@@ -342,6 +374,11 @@ func resourceArmKustoDatabaseTableDelete(d *schema.ResourceData, meta interface{
 	)
 
 	return nil
+}
+
+func expandKustoTableMapping(mapping []interface{}, kind string) *string {
+	// TODO: expand column mappings
+	return utils.String("")
 }
 
 func flattenKustoTableMapping(mapping string) []interface{} {

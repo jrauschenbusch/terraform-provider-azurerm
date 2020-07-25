@@ -4,6 +4,7 @@ require (
 	github.com/Azure/azure-kusto-go v0.2.0
 	github.com/Azure/azure-sdk-for-go v44.1.0+incompatible
 	github.com/Azure/go-autorest/autorest v0.10.0
+	github.com/Azure/go-autorest/autorest/azure/auth v0.4.2
 	github.com/Azure/go-autorest/autorest/date v0.2.0
 	github.com/btubbs/datetime v0.1.0
 	github.com/davecgh/go-spew v1.1.1
