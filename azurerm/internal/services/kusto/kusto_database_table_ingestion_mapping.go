@@ -20,6 +20,7 @@ import (
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/clients"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/services/kusto/parse"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/timeouts"
+	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
 )
 
 type MappingRec struct {
@@ -33,7 +34,7 @@ type MappingRec struct {
 type MappingCol struct {
 	Column     string
 	DataType   string
-	Properties MappingColProperties
+	Properties *MappingColProperties
 }
 
 type MappingColProperties struct {
@@ -288,7 +289,10 @@ func resourceArmKustoDatabaseTableCreateUpdate(d *schema.ResourceData, meta inte
 	}
 
 	// TODO: expand column mappings
-	columnMappings := expandKustoTableMapping(mapping, kind)
+	columnMappings, err := expandKustoTableMapping(mapping, kind)
+	if err != nil {
+		return err
+	}
 	stmtRaw := fmt.Sprintf(".create-or-alter table %s ingestion %s mapping \"%s\" '%s'", tableName, strings.ToLower(kind), name, *columnMappings)
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true})).UnsafeAdd(stmtRaw)
@@ -372,7 +376,11 @@ func resourceArmKustoDatabaseTableRead(d *schema.ResourceData, meta interface{})
 	d.Set("table_name", recs[0].Table)
 	d.Set("name", recs[0].Name)
 	d.Set("kind", strings.ToUpper(recs[0].Kind))
-	d.Set("mapping", flattenKustoTableMapping(recs[0].Mapping, strings.ToUpper(recs[0].Kind)))
+	mappings, err := flattenKustoTableMapping(recs[0].Mapping, strings.ToUpper(recs[0].Kind))
+	if err != nil {
+		return err
+	}
+	d.Set("mapping", mappings)
 
 	return nil
 }
@@ -425,7 +433,7 @@ func resourceArmKustoDatabaseTableDelete(d *schema.ResourceData, meta interface{
 	return nil
 }
 
-func expandKustoTableMapping(input []interface{}, kind string) (string, error) {
+func expandKustoTableMapping(input []interface{}, kind string) (*string, error) {
 	if len(input) == 0 {
 		return nil, fmt.Errorf("At least one column mapping must me be provided")
 	}
@@ -437,14 +445,14 @@ func expandKustoTableMapping(input []interface{}, kind string) (string, error) {
 
 		props := mapping["properties"].(map[string]interface{})
 
-		o := &MappingCol{
+		o := MappingCol{
 			Column:   mapping["column"].(string),
 			DataType: mapping["data_type"].(string),
 			Properties: &MappingColProperties{
 				Path:       props["path"].(string),
 				ConstValue: props["const_value"].(string),
 				Field:      props["field"].(string),
-				Ordinal:    props["ordinal"].(int),
+				Ordinal:    props["ordinal"].(string),
 				Transform:  props["transform"].(string),
 			},
 		}
@@ -457,12 +465,12 @@ func expandKustoTableMapping(input []interface{}, kind string) (string, error) {
 		return nil, err
 	}
 
-	return string(mappingsJSON), nil
+	return utils.String(string(mappingsJSON)), nil
 }
 
 func flattenKustoTableMapping(input string, kind string) ([]interface{}, error) {
 	if len(input) == 0 {
-		return []interface{}{}
+		return []interface{}{}, nil
 	}
 
 	output := make([]interface{}, 0)
@@ -477,7 +485,7 @@ func flattenKustoTableMapping(input string, kind string) ([]interface{}, error) 
 		o := make(map[string]interface{}, 0)
 
 		switch kind {
-		case formats.AVRO:
+		case string(formats.AVRO):
 			avro := m.(AvroMapping)
 			o["column"] = avro.column
 			o["data_type"] = avro.datatype
@@ -485,7 +493,7 @@ func flattenKustoTableMapping(input string, kind string) ([]interface{}, error) 
 			o["properties"] = props
 			props["field"] = avro.field
 			props["transform"] = avro.transform
-		case formats.CSV:
+		case string(formats.CSV):
 			csv := m.(CsvMapping)
 			o["column"] = csv.Name
 			o["data_type"] = csv.DataType
@@ -493,9 +501,9 @@ func flattenKustoTableMapping(input string, kind string) ([]interface{}, error) 
 			o["properties"] = props
 			props["ordinal"] = csv.Ordinal
 			props["const_value"] = csv.ConstValue
-		case formats.JSON:
-		case formats.ORC:
-		case formats.PARQUET:
+		case string(formats.JSON):
+		case string(formats.ORC):
+		case string(formats.PARQUET):
 			json := m.(JsonMapping)
 			o["column"] = json.column
 			o["data_type"] = json.datatype
