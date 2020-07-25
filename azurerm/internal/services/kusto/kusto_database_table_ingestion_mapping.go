@@ -1,6 +1,7 @@
 package kusto
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -19,7 +20,6 @@ import (
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/clients"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/services/kusto/parse"
 	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/internal/timeouts"
-	"github.com/terraform-providers/terraform-provider-azurerm/azurerm/utils"
 )
 
 type MappingRec struct {
@@ -28,6 +28,55 @@ type MappingRec struct {
 	Mapping  string
 	Database string
 	Table    string
+}
+
+type MappingCol struct {
+	Column     string
+	DataType   string
+	Properties MappingColProperties
+}
+
+type MappingColProperties struct {
+	Ordinal    string
+	ConstValue string
+	Path       string
+	Field      string
+	Transform  string
+}
+
+type CsvMapping struct {
+	Name       string
+	DataType   string
+	Ordinal    string
+	ConstValue string
+}
+
+type JsonMapping struct {
+	column    string
+	path      string
+	datatype  string
+	transform string
+}
+
+type AvroMapping struct {
+	column    string
+	field     string
+	datatype  string
+	transform string
+}
+
+type OrcMapping struct {
+	column    string
+	path      string
+	datatype  string
+	transform string
+}
+
+type ParquetMapping struct {
+	column    string
+	path      string
+	datatype  string
+	transform string
 }
 
 func resourceArmKustoDatabaseTableIngestionMapping() *schema.Resource {
@@ -117,7 +166,7 @@ func resourceArmKustoDatabaseTableIngestionMapping() *schema.Resource {
 								string(types.String),
 								string(types.Timespan),
 								string(types.Decimal),
-							}),
+							}, false),
 						},
 						"properties": {
 							Type:     schema.TypeList,
@@ -125,12 +174,12 @@ func resourceArmKustoDatabaseTableIngestionMapping() *schema.Resource {
 							Optional: true,
 							Elem: &schema.Resource{
 								Schema: map[string]*schema.Schema{
-									"field": {
+									"path": {
 										Type:         schema.TypeString,
 										Optional:     true,
 										ValidateFunc: validation.StringIsNotEmpty,
 									},
-									"path": {
+									"field": {
 										Type:         schema.TypeString,
 										Optional:     true,
 										ValidateFunc: validation.StringIsNotEmpty,
@@ -322,8 +371,8 @@ func resourceArmKustoDatabaseTableRead(d *schema.ResourceData, meta interface{})
 	d.Set("database_name", recs[0].Database)
 	d.Set("table_name", recs[0].Table)
 	d.Set("name", recs[0].Name)
-	d.Set("kind", recs[0].Kind)
-	d.Set("mapping", flattenKustoTableMapping(recs[0].Mapping))
+	d.Set("kind", strings.ToUpper(recs[0].Kind))
+	d.Set("mapping", flattenKustoTableMapping(recs[0].Mapping, strings.ToUpper(recs[0].Kind)))
 
 	return nil
 }
@@ -376,19 +425,88 @@ func resourceArmKustoDatabaseTableDelete(d *schema.ResourceData, meta interface{
 	return nil
 }
 
-func expandKustoTableMapping(mapping []interface{}, kind string) *string {
-	// TODO: expand column mappings
-	return utils.String("")
+func expandKustoTableMapping(input []interface{}, kind string) (string, error) {
+	if len(input) == 0 {
+		return nil, fmt.Errorf("At least one column mapping must me be provided")
+	}
+
+	var mappings []MappingCol
+
+	for _, v := range input {
+		mapping := v.(map[string]interface{})
+
+		props := mapping["properties"].(map[string]interface{})
+
+		o := &MappingCol{
+			Column:   mapping["column"].(string),
+			DataType: mapping["data_type"].(string),
+			Properties: &MappingColProperties{
+				Path:       props["path"].(string),
+				ConstValue: props["const_value"].(string),
+				Field:      props["field"].(string),
+				Ordinal:    props["ordinal"].(int),
+				Transform:  props["transform"].(string),
+			},
+		}
+
+		mappings = append(mappings, o)
+	}
+
+	mappingsJSON, err := json.Marshal(mappings)
+	if err != nil {
+		return nil, err
+	}
+
+	return string(mappingsJSON), nil
 }
 
-func flattenKustoTableMapping(mapping string) []interface{} {
-	if len(mapping) == 0 {
-		return nil
+func flattenKustoTableMapping(input string, kind string) ([]interface{}, error) {
+	if len(input) == 0 {
+		return []interface{}{}
 	}
 
 	output := make([]interface{}, 0)
 
-	// TODO: flatten column mappings
+	var mappings []interface{}
+	err := json.Unmarshal([]byte(input), &mappings)
+	if err != nil {
+		return nil, err
+	}
 
-	return output
+	for _, m := range mappings {
+		o := make(map[string]interface{}, 0)
+
+		switch kind {
+		case formats.AVRO:
+			avro := m.(AvroMapping)
+			o["column"] = avro.column
+			o["data_type"] = avro.datatype
+			props := make(map[string]interface{}, 0)
+			o["properties"] = props
+			props["field"] = avro.field
+			props["transform"] = avro.transform
+		case formats.CSV:
+			csv := m.(CsvMapping)
+			o["column"] = csv.Name
+			o["data_type"] = csv.DataType
+			props := make(map[string]interface{}, 0)
+			o["properties"] = props
+			props["ordinal"] = csv.Ordinal
+			props["const_value"] = csv.ConstValue
+		case formats.JSON:
+		case formats.ORC:
+		case formats.PARQUET:
+			json := m.(JsonMapping)
+			o["column"] = json.column
+			o["data_type"] = json.datatype
+			props := make(map[string]interface{}, 0)
+			o["properties"] = props
+			props["path"] = json.path
+			props["transform"] = json.transform
+		}
+
+		output = append(output, o)
+	}
+
+	return output, nil
 }
